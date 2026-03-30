@@ -1,0 +1,7 @@
+huggingface-hub
+transformers
+onnx
+safetensors
+torch
+protobuf
+graphviz

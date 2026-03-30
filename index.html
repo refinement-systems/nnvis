@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NNVis - Model Visualizer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Background Elements -->
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+    
+    <div class="app-container">
+        <!-- Initial Upload Screen -->
+        <div id="upload-screen" class="view-state active">
+            <div class="upload-box" id="drop-zone">
+                <svg viewBox="0 0 24 24" fill="none" class="upload-icon">
+                    <path d="M12 4L12 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M17 9L12 4L7 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M20 20L4 20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <h2>Drop model_summary.json here</h2>
+                <p>or click to select file</p>
+                <input type="file" id="file-input" accept=".json" hidden>
+            </div>
+        </div>
+
+        <!-- Main Dashboard Screen -->
+        <div id="dashboard-screen" class="view-state">
+            <header class="app-header">
+                <h1>NN<span>Vis</span></h1>
+                <div class="model-badge">
+                    <span id="model-type-badge">Unknown Model</span>
+                </div>
+            </header>
+
+            <main class="dashboard-grid">
+                <!-- Sidebar Summary Panel -->
+                <aside class="panel glass-panel summary-panel">
+                    <h3>Architecture Summary</h3>
+                    <div class="stats-grid" id="summary-stats">
+                        <!-- Stats injected via JS -->
+                    </div>
+                    <button id="view-graph-btn" class="glass-btn" style="display: none; margin-top: 1.5rem;">View Full ONNX Graph</button>
+                </aside>
+
+                <!-- Conceptual Architecture View -->
+                <section class="panel glass-panel main-view">
+                    <h3>Conceptual Flow</h3>
+                    <div class="architecture-flow" id="architecture-flow">
+                        <!-- Blocks injected via JS -->
+                    </div>
+                </section>
+
+                <!-- Tensor Inventory Panel -->
+                <aside class="panel glass-panel tensor-panel">
+                    <h3>Tensor Inventory</h3>
+                    <div class="search-box">
+                        <input type="text" id="tensor-search" placeholder="Search tensors...">
+                    </div>
+                    <div class="tensor-list" id="tensor-list">
+                        <!-- Tensor rows injected via JS -->
+                    </div>
+                </aside>
+            </main>
+        </div>
+    </div>
+
+    <!-- Graph Modal -->
+    <div id="graph-modal" class="modal-overlay">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h2>Executable Graph (ONNX)</h2>
+                <button id="close-modal-btn" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body" id="graph-container">
+                <!-- SVG injected via JS -->
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
