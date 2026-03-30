@@ -5,7 +5,8 @@ from transformers import AutoConfig
 import safetensors
 import onnx
 import struct
-import graphviz
+import hashlib
+import math
 
 def extract_config_summary(model_dir: str):
     config = AutoConfig.from_pretrained(model_dir)
@@ -61,51 +62,115 @@ def extract_onnx_graph(model_dir: str):
             })
     return graph_info
 
-def generate_onnx_svg(onnx_graph_info):
-    dot = graphviz.Digraph(comment='ONNX Model', format='svg')
-    dot.attr(rankdir='TB', nodesep='0.5', ranksep='0.8')
-    dot.attr('node', shape='box', style='rounded,filled', fillcolor='#2b303b', fontcolor='white', fontname='Helvetica', color='#4f5b66')
-    dot.attr('edge', color='#8c9440')
-    dot.attr('graph', bgcolor='transparent')
+def generate_layering(onnx_graph_info):
+    nodes_by_name = {}
+    for i, n in enumerate(onnx_graph_info):
+        name = n.get("name") or f"{n['op_type']}_{i}"
+        nodes_by_name[name] = n
+        
+    incoming_edges = {n: [] for n in nodes_by_name}
+    outgoing_edges = {n: [] for n in nodes_by_name}
     
-    created_nodes = set()
-    MAX_NODES = 150
-    for i, node in enumerate(onnx_graph_info):
-        if i >= MAX_NODES:
-            dot.node("truncated", "Graph Truncated\\njuggling 3000+ nodes crashes layout", shape="note", fillcolor="#bf616a")
-            break
-            
-        node_id = f"node_{i}"
-        # Keep label short
-        label = node.get("name", "") or node["op_type"]
-        if len(label) > 30:
-            label = label[:27] + "..."
-        op_type = node["op_type"]
-        
-        dot.node(node_id, f"{op_type}\\n{label}")
-        created_nodes.add(node_id)
-        
-        for inp in node["inputs"]:
-            if inp:
-                if inp not in created_nodes:
-                    dot.node(inp, inp[:20] + ("..." if len(inp)>20 else ""), shape='ellipse', fillcolor='#343d46', fontcolor='#c0c5ce', color='#4f5b66')
-                    created_nodes.add(inp)
-                dot.edge(inp, node_id)
-                
-        for out in node["outputs"]:
+    known_outputs = {}
+    for name, node in nodes_by_name.items():
+        for out in node.get("outputs", []):
             if out:
-                if out not in created_nodes:
-                    dot.node(out, out[:20] + ("..." if len(out)>20 else ""), shape='ellipse', fillcolor='#343d46', fontcolor='#c0c5ce', color='#4f5b66')
-                    created_nodes.add(out)
-                dot.edge(node_id, out)
+                known_outputs[out] = name
+
+    for name, node in nodes_by_name.items():
+        for inp in node.get("inputs", []):
+            if inp and inp in known_outputs:
+                src_node = known_outputs[inp]
+                outgoing_edges[src_node].append(name)
+                incoming_edges[name].append(src_node)
+
+    levels = {}
+    queue = []
+    
+    in_degrees = {n: len(incoming_edges[n]) for n in nodes_by_name}
+    for n, deg in in_degrees.items():
+        if deg == 0:
+            levels[n] = 0
+            queue.append(n)
+            
+    while queue:
+        curr = queue.pop(0)
+        curr_level = levels[curr]
+        
+        for neighbor in outgoing_edges[curr]:
+            if neighbor not in levels or levels[neighbor] <= curr_level:
+                levels[neighbor] = curr_level + 1
+            
+            in_degrees[neighbor] -= 1
+            if in_degrees[neighbor] == 0:
+                queue.append(neighbor)
                 
-    try:
-        print("Rendering Graphviz SVG (this may take a moment)...")
-        svg_bytes = dot.pipe()
-        return svg_bytes.decode('utf-8')
-    except Exception as e:
-        print(f"Warning: Failed to render graphviz SVG: {e}")
-        return ""
+    max_l = max(levels.values()) if levels else 0
+    for n in nodes_by_name:
+        if n not in levels:
+            levels[n] = max_l + 1
+            
+    return levels, outgoing_edges, nodes_by_name
+
+def string_to_color(s):
+    hash_object = hashlib.md5(s.encode())
+    hex_color = hash_object.hexdigest()[:6]
+    r = int(hex_color[0:2], 16) / 255.0
+    g = int(hex_color[2:4], 16) / 255.0
+    b = int(hex_color[4:6], 16) / 255.0
+    return [r, g, b]
+
+def generate_onnx_3d_layout(onnx_graph_info):
+    levels, outgoing_edges, nodes_by_name = generate_layering(onnx_graph_info)
+    
+    nodes_by_level = {}
+    for n, l in levels.items():
+        if l not in nodes_by_level:
+            nodes_by_level[l] = []
+        nodes_by_level[l].append(n)
+        
+    positions = {}
+    Y_SPACING = 3.0
+    XZ_SPACING = 1.5
+    
+    nodes_out = []
+    for l, level_nodes in nodes_by_level.items():
+        count = len(level_nodes)
+        grid_size = math.ceil(math.sqrt(count))
+        
+        for i, n in enumerate(level_nodes):
+            row = i // grid_size
+            col = i % grid_size
+            
+            x = (col - (grid_size - 1) / 2.0) * XZ_SPACING
+            z = (row - (grid_size - 1) / 2.0) * XZ_SPACING
+            y = l * Y_SPACING
+            
+            positions[n] = [x, y, z]
+            
+            op_type = nodes_by_name[n].get("op_type", "Unknown")
+            nodes_out.append({
+                "id": n,
+                "label": op_type,
+                "op_type": op_type,
+                "pos": [x, y, z],
+                "color": string_to_color(op_type)
+            })
+
+    edges_out = []
+    for src, targets in outgoing_edges.items():
+        for tgt in targets:
+            if src in positions and tgt in positions:
+                edges_out.append({
+                    "source": src,
+                    "target": tgt,
+                    "points": [positions[src], positions[tgt]]
+                })
+                
+    return {
+        "nodes": nodes_out,
+        "edges": edges_out
+    }
 
 def generate_layer_names(config_summary):
     # Conceptual blocks mapped based on DeBERTa's model architecture logic.
@@ -139,7 +204,7 @@ def main():
         "summary": summary,
         "layer_names": layer_names,
         "executable_graph": onnx_graph,
-        "executable_graph_svg": generate_onnx_svg(onnx_graph),
+        "executable_graph_3d": generate_onnx_3d_layout(onnx_graph),
         "tensor_names": safetensors_meta
     }
     

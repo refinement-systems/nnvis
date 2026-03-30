@@ -72,17 +72,25 @@
 
     <!-- Graph Modal -->
     <div id="graph-modal" class="modal-overlay">
-        <div class="modal-content glass-panel">
+        <div class="modal-content glass-panel" style="width: 95vw; height: 95vh; max-width: 1600px; display: flex; flex-direction: column;">
             <div class="modal-header">
-                <h2>Executable Graph (ONNX)</h2>
+                <h2>Executable Graph (ONNX 3D)</h2>
                 <button id="close-modal-btn" class="close-btn">&times;</button>
             </div>
-            <div class="modal-body" id="graph-container">
-                <!-- SVG injected via JS -->
+            <div class="modal-body" id="graph-container" style="flex: 1; padding: 0; overflow: hidden; position: relative;">
+                <!-- Canvas injected via JS -->
             </div>
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>

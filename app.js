@@ -1,3 +1,6 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
 document.addEventListener('DOMContentLoaded', () => {
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
@@ -103,9 +106,9 @@ document.addEventListener('DOMContentLoaded', () => {
       summaryStats.appendChild(div);
     });
 
-    if (data.executable_graph_svg) {
+    if (data.executable_graph_3d) {
       viewGraphBtn.style.display = 'block';
-      graphContainer.innerHTML = data.executable_graph_svg;
+      init3DGraph(data.executable_graph_3d);
     } else {
       viewGraphBtn.style.display = 'none';
       graphContainer.innerHTML = '';
@@ -181,9 +184,16 @@ document.addEventListener('DOMContentLoaded', () => {
     renderTensors(filtered);
   });
 
-  // Modal logic
   viewGraphBtn.addEventListener('click', () => {
     graphModal.classList.add('active');
+    // Force renderer resize and update when modal becomes visible
+    if (renderer && camera) {
+      setTimeout(() => {
+        camera.aspect = graphContainer.clientWidth / graphContainer.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(graphContainer.clientWidth, graphContainer.clientHeight);
+      }, 50);
+    }
   });
   closeModalBtn.addEventListener('click', () => {
     graphModal.classList.remove('active');
@@ -193,4 +203,102 @@ document.addEventListener('DOMContentLoaded', () => {
       graphModal.classList.remove('active');
     }
   });
+
+  // 3D Rendering Logic
+  let renderer, scene, camera, controls;
+
+  function init3DGraph(graphData) {
+    if (!renderer) {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1a1c23); // Match existing styling lightly
+      
+      camera = new THREE.PerspectiveCamera(60, 1, 0.1, 10000);
+      camera.position.set(0, 0, 100);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      graphContainer.appendChild(renderer.domElement);
+
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+
+      window.addEventListener('resize', () => {
+        if (!graphModal.classList.contains('active')) return;
+        camera.aspect = graphContainer.clientWidth / graphContainer.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(graphContainer.clientWidth, graphContainer.clientHeight);
+      });
+
+      // render loop
+      renderer.setAnimationLoop(() => {
+        if (graphModal.classList.contains('active')) {
+          controls.update();
+          renderer.render(scene, camera);
+        }
+      });
+    }
+
+    // Clear previous scene
+    while(scene.children.length > 0) { 
+        scene.remove(scene.children[0]); 
+    }
+    
+    // Add lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(200, 500, 300);
+    scene.add(dirLight);
+
+    const { nodes, edges } = graphData;
+
+    // 1. Nodes using InstancedMesh
+    const geometry = new THREE.SphereGeometry(0.5, 16, 16);
+    const material = new THREE.MeshPhongMaterial({ shininess: 30 });
+    const instancedMesh = new THREE.InstancedMesh(geometry, material, nodes.length);
+    
+    const dummy = new THREE.Object3D();
+    const color = new THREE.Color();
+    let center = new THREE.Vector3(0, 0, 0);
+    
+    for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
+        dummy.position.set(n.pos[0], n.pos[1], n.pos[2]);
+        center.add(dummy.position);
+        dummy.updateMatrix();
+        instancedMesh.setMatrixAt(i, dummy.matrix);
+        
+        color.setRGB(n.color[0], n.color[1], n.color[2]);
+        instancedMesh.setColorAt(i, color);
+    }
+    instancedMesh.instanceMatrix.needsUpdate = true;
+    if(instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+    scene.add(instancedMesh);
+    
+    if (nodes.length > 0) {
+        center.divideScalar(nodes.length);
+        controls.target.copy(center);
+        camera.position.set(center.x, center.y, center.z + 50);
+    }
+
+    // 2. Edges using LineSegments
+    const edgePoints = [];
+    for (let i=0; i < edges.length; i++) {
+        const e = edges[i];
+        if (e.points && e.points.length >= 2) {
+            edgePoints.push(
+                e.points[0][0], e.points[0][1], e.points[0][2],
+                e.points[1][0], e.points[1][1], e.points[1][2]
+            );
+        }
+    }
+    
+    const edgeGeom = new THREE.BufferGeometry();
+    edgeGeom.setAttribute('position', new THREE.Float32BufferAttribute(edgePoints, 3));
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.5 });
+    const lines = new THREE.LineSegments(edgeGeom, edgeMat);
+    scene.add(lines);
+  }
 });
