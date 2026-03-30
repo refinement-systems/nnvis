@@ -199,11 +199,16 @@ def generate_onnx_3d_layout(onnx_graph_info):
                 if tgt not in positions: continue
                 p2 = positions[tgt]
                 dx = p2[0] - p1[0]
+                dy = abs(p2[1] - p1[1])
                 dz = p2[2] - p1[2]
                 
                 # Attract towards each other
-                fx = dx * ATTRACTION_FACTOR
-                fz = dz * ATTRACTION_FACTOR
+                # Distance-decayed attraction for vertical jumps
+                distance_ratio = max(1.0, dy / Y_SPACING)
+                decayed_attraction = ATTRACTION_FACTOR / (distance_ratio * distance_ratio)
+                
+                fx = dx * decayed_attraction
+                fz = dz * decayed_attraction
                 
                 displacements[n][0] += fx
                 displacements[n][1] += fz
