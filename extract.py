@@ -7,6 +7,7 @@ import onnx
 import struct
 import hashlib
 import math
+import random
 
 def extract_config_summary(model_dir: str):
     config = AutoConfig.from_pretrained(model_dir)
@@ -130,32 +131,102 @@ def generate_onnx_3d_layout(onnx_graph_info):
         nodes_by_level[l].append(n)
         
     positions = {}
-    Y_SPACING = 3.0
-    XZ_SPACING = 1.5
+    Y_SPACING = 5.0
+    XZ_SPACING = 3.0
     
-    nodes_out = []
+    # 1. Initialize random or grid positions in X-Z plane
+    random.seed(42) # deterministic
     for l, level_nodes in nodes_by_level.items():
         count = len(level_nodes)
         grid_size = math.ceil(math.sqrt(count))
-        
         for i, n in enumerate(level_nodes):
             row = i // grid_size
             col = i % grid_size
-            
-            x = (col - (grid_size - 1) / 2.0) * XZ_SPACING
-            z = (row - (grid_size - 1) / 2.0) * XZ_SPACING
+            x = (col - (grid_size - 1) / 2.0) * XZ_SPACING + random.uniform(-0.1, 0.1)
+            z = (row - (grid_size - 1) / 2.0) * XZ_SPACING + random.uniform(-0.1, 0.1)
             y = l * Y_SPACING
-            
             positions[n] = [x, y, z]
-            
-            op_type = nodes_by_name[n].get("op_type", "Unknown")
-            nodes_out.append({
-                "id": n,
-                "label": op_type,
-                "op_type": op_type,
-                "pos": [x, y, z],
-                "color": string_to_color(op_type)
-            })
+
+    # Build incoming edges
+    outgoing_edges_set = {n: set() for n in levels}
+    for src, tgts in outgoing_edges.items():
+        for tgt in tgts:
+            if src in levels and tgt in levels:
+                outgoing_edges_set[src].add(tgt)
+
+    # 2. Iterate Force Directed on X and Z
+    ITERATIONS = 50
+    ATTRACTION_FACTOR = 0.05
+    REPULSION_FACTOR = 1.0
+    REPULSION_RADIUS = XZ_SPACING * 1.5
+
+    for iteration in range(ITERATIONS):
+        displacements = {n: [0.0, 0.0] for n in levels}
+        
+        # Repulsion between nodes in the same level
+        for l, level_nodes in nodes_by_level.items():
+            for i in range(len(level_nodes)):
+                n1 = level_nodes[i]
+                p1 = positions[n1]
+                for j in range(i + 1, len(level_nodes)):
+                    n2 = level_nodes[j]
+                    p2 = positions[n2]
+                    
+                    dx = p1[0] - p2[0]
+                    dz = p1[2] - p2[2]
+                    dist_sq = dx*dx + dz*dz
+                    if dist_sq < 0.0001:
+                        dx = random.uniform(-0.1, 0.1)
+                        dz = random.uniform(-0.1, 0.1)
+                        dist_sq = dx*dx + dz*dz
+                        
+                    if dist_sq < REPULSION_RADIUS * REPULSION_RADIUS:
+                        dist = math.sqrt(dist_sq)
+                        force = REPULSION_FACTOR * (REPULSION_RADIUS - dist) / dist
+                        fx = dx * force
+                        fz = dz * force
+                        
+                        displacements[n1][0] += fx
+                        displacements[n1][1] += fz
+                        displacements[n2][0] -= fx
+                        displacements[n2][1] -= fz
+        
+        # Attraction between connected nodes (parents and children)
+        for n, tgts in outgoing_edges_set.items():
+            if n not in positions: continue
+            p1 = positions[n]
+            for tgt in tgts:
+                if tgt not in positions: continue
+                p2 = positions[tgt]
+                dx = p2[0] - p1[0]
+                dz = p2[2] - p1[2]
+                
+                # Attract towards each other
+                fx = dx * ATTRACTION_FACTOR
+                fz = dz * ATTRACTION_FACTOR
+                
+                displacements[n][0] += fx
+                displacements[n][1] += fz
+                displacements[tgt][0] -= fx
+                displacements[tgt][1] -= fz
+                
+        # Apply displacements and cool down
+        cooling = max(0.05, 1.0 - (iteration / ITERATIONS))
+        for n, disp in displacements.items():
+            positions[n][0] += disp[0] * cooling
+            positions[n][2] += disp[1] * cooling
+
+    nodes_out = []
+    for n in levels:
+        op_type = nodes_by_name[n].get("op_type", "Unknown")
+        x, y, z = positions[n]
+        nodes_out.append({
+            "id": n,
+            "label": op_type,
+            "op_type": op_type,
+            "pos": [x, y, z],
+            "color": string_to_color(op_type)
+        })
 
     edges_out = []
     for src, targets in outgoing_edges.items():
