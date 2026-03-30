@@ -1,3 +1,16 @@
+/*
+ * Permission to use, copy, modify, and/or distribute this software for
+ * any purpose with or without fee is hereby granted.
+ *
+ * THE SOFTWARE IS PROVIDED “AS IS” AND THE AUTHOR DISCLAIMS ALL
+ * WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE
+ * FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY
+ * DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+ * AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+ * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -37,7 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
   dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('drag-active');
-    
+
     if (e.dataTransfer.files.length) {
       handleFile(e.dataTransfer.files[0]);
     }
@@ -86,7 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 2. Summary & Header
     modelTypeBadge.textContent = (data.summary.model_type || "Unknown").toUpperCase();
-    
+
     summaryStats.innerHTML = ''; // clear
     const statsToRender = [
       { label: 'Vocab Size', value: data.summary.vocab_size?.toLocaleString() || 'N/A' },
@@ -124,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div style="font-weight: 600; margin-bottom: 0.25rem;">${layer.description || layer.id}</div>
         <div style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">${layer.id}</div>
       `;
-      
+
       // If Sub-components exist, render them inside the accordion
       if (layer.sub_components && layer.sub_components.length > 0) {
         const subContainer = document.createElement('div');
@@ -135,7 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
           subEl.textContent = sub;
           subContainer.appendChild(subEl);
         });
-        
+
         node.appendChild(subContainer);
         // Toggle on click
         node.addEventListener('click', () => {
@@ -150,13 +163,13 @@ document.addEventListener('DOMContentLoaded', () => {
     allTensors = Object.keys(tensors).map(key => {
       return {
         name: key,
-        shape: `[${tensors[key].shape?.join(', ') || '?' }]`,
+        shape: `[${tensors[key].shape?.join(', ') || '?'}]`,
         dtype: tensors[key].dtype || '?'
       }
     });
-    
+
     // Sort array by name
-    allTensors.sort((a,b) => a.name.localeCompare(b.name));
+    allTensors.sort((a, b) => a.name.localeCompare(b.name));
     renderTensors(allTensors);
   }
 
@@ -211,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!renderer) {
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x1a1c23); // Match existing styling lightly
-      
+
       camera = new THREE.PerspectiveCamera(60, 1, 0.1, 10000);
       camera.position.set(0, 0, 100);
 
@@ -240,14 +253,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Clear previous scene
-    while(scene.children.length > 0) { 
-        scene.remove(scene.children[0]); 
+    while (scene.children.length > 0) {
+      scene.remove(scene.children[0]);
     }
-    
+
     // Add lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambientLight);
-    
+
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
     dirLight.position.set(200, 500, 300);
     scene.add(dirLight);
@@ -258,77 +271,77 @@ document.addEventListener('DOMContentLoaded', () => {
     const geometry = new THREE.SphereGeometry(0.5, 16, 16);
     const material = new THREE.MeshPhongMaterial({ shininess: 30 });
     const instancedMesh = new THREE.InstancedMesh(geometry, material, nodes.length);
-    
+
     const dummy = new THREE.Object3D();
     const color = new THREE.Color();
     let center = new THREE.Vector3(0, 0, 0);
-    
+
     for (let i = 0; i < nodes.length; i++) {
-        const n = nodes[i];
-        dummy.position.set(n.pos[0], n.pos[1], n.pos[2]);
-        center.add(dummy.position);
-        dummy.updateMatrix();
-        instancedMesh.setMatrixAt(i, dummy.matrix);
-        
-        color.setRGB(n.color[0], n.color[1], n.color[2]);
-        instancedMesh.setColorAt(i, color);
+      const n = nodes[i];
+      dummy.position.set(n.pos[0], n.pos[1], n.pos[2]);
+      center.add(dummy.position);
+      dummy.updateMatrix();
+      instancedMesh.setMatrixAt(i, dummy.matrix);
+
+      color.setRGB(n.color[0], n.color[1], n.color[2]);
+      instancedMesh.setColorAt(i, color);
     }
     instancedMesh.instanceMatrix.needsUpdate = true;
-    if(instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+    if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
     scene.add(instancedMesh);
-    
+
     if (nodes.length > 0) {
-        center.divideScalar(nodes.length);
-        controls.target.copy(center);
-        camera.position.set(center.x, center.y, center.z + 50);
+      center.divideScalar(nodes.length);
+      controls.target.copy(center);
+      camera.position.set(center.x, center.y, center.z + 50);
     }
 
     // 2. Edges using separate LineSegments by length to manage opacity
     const edgePointsShort = [];
     const edgePointsMedium = [];
     const edgePointsLong = [];
-    
-    for (let i=0; i < edges.length; i++) {
-        const e = edges[i];
-        if (e.points && e.points.length >= 2) {
-            const dy = Math.abs(e.points[1][1] - e.points[0][1]);
-            const pts = [
-                e.points[0][0], e.points[0][1], e.points[0][2],
-                e.points[1][0], e.points[1][1], e.points[1][2]
-            ];
-            
-            if (dy > 20.0) {
-                edgePointsLong.push(...pts);
-            } else if (dy > 6.0) {
-                edgePointsMedium.push(...pts);
-            } else {
-                edgePointsShort.push(...pts);
-            }
+
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i];
+      if (e.points && e.points.length >= 2) {
+        const dy = Math.abs(e.points[1][1] - e.points[0][1]);
+        const pts = [
+          e.points[0][0], e.points[0][1], e.points[0][2],
+          e.points[1][0], e.points[1][1], e.points[1][2]
+        ];
+
+        if (dy > 20.0) {
+          edgePointsLong.push(...pts);
+        } else if (dy > 6.0) {
+          edgePointsMedium.push(...pts);
+        } else {
+          edgePointsShort.push(...pts);
         }
+      }
     }
-    
+
     // Short connections (opaque)
     if (edgePointsShort.length > 0) {
-        const edgeGeomS = new THREE.BufferGeometry();
-        edgeGeomS.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsShort, 3));
-        const edgeMatS = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.6 });
-        scene.add(new THREE.LineSegments(edgeGeomS, edgeMatS));
+      const edgeGeomS = new THREE.BufferGeometry();
+      edgeGeomS.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsShort, 3));
+      const edgeMatS = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.6 });
+      scene.add(new THREE.LineSegments(edgeGeomS, edgeMatS));
     }
-    
+
     // Medium connections (semi-transparent)
     if (edgePointsMedium.length > 0) {
-        const edgeGeomM = new THREE.BufferGeometry();
-        edgeGeomM.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsMedium, 3));
-        const edgeMatM = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.15 });
-        scene.add(new THREE.LineSegments(edgeGeomM, edgeMatM));
+      const edgeGeomM = new THREE.BufferGeometry();
+      edgeGeomM.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsMedium, 3));
+      const edgeMatM = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.15 });
+      scene.add(new THREE.LineSegments(edgeGeomM, edgeMatM));
     }
-    
+
     // Long connections (barely visible)
     if (edgePointsLong.length > 0) {
-        const edgeGeomL = new THREE.BufferGeometry();
-        edgeGeomL.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsLong, 3));
-        const edgeMatL = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.02 });
-        scene.add(new THREE.LineSegments(edgeGeomL, edgeMatL));
+      const edgeGeomL = new THREE.BufferGeometry();
+      edgeGeomL.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsLong, 3));
+      const edgeMatL = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.02 });
+      scene.add(new THREE.LineSegments(edgeGeomL, edgeMatL));
     }
   }
 });
