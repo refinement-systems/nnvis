@@ -283,22 +283,52 @@ document.addEventListener('DOMContentLoaded', () => {
         camera.position.set(center.x, center.y, center.z + 50);
     }
 
-    // 2. Edges using LineSegments
-    const edgePoints = [];
+    // 2. Edges using separate LineSegments by length to manage opacity
+    const edgePointsShort = [];
+    const edgePointsMedium = [];
+    const edgePointsLong = [];
+    
     for (let i=0; i < edges.length; i++) {
         const e = edges[i];
         if (e.points && e.points.length >= 2) {
-            edgePoints.push(
+            const dy = Math.abs(e.points[1][1] - e.points[0][1]);
+            const pts = [
                 e.points[0][0], e.points[0][1], e.points[0][2],
                 e.points[1][0], e.points[1][1], e.points[1][2]
-            );
+            ];
+            
+            if (dy > 20.0) {
+                edgePointsLong.push(...pts);
+            } else if (dy > 6.0) {
+                edgePointsMedium.push(...pts);
+            } else {
+                edgePointsShort.push(...pts);
+            }
         }
     }
     
-    const edgeGeom = new THREE.BufferGeometry();
-    edgeGeom.setAttribute('position', new THREE.Float32BufferAttribute(edgePoints, 3));
-    const edgeMat = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.5 });
-    const lines = new THREE.LineSegments(edgeGeom, edgeMat);
-    scene.add(lines);
+    // Short connections (opaque)
+    if (edgePointsShort.length > 0) {
+        const edgeGeomS = new THREE.BufferGeometry();
+        edgeGeomS.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsShort, 3));
+        const edgeMatS = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.6 });
+        scene.add(new THREE.LineSegments(edgeGeomS, edgeMatS));
+    }
+    
+    // Medium connections (semi-transparent)
+    if (edgePointsMedium.length > 0) {
+        const edgeGeomM = new THREE.BufferGeometry();
+        edgeGeomM.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsMedium, 3));
+        const edgeMatM = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.15 });
+        scene.add(new THREE.LineSegments(edgeGeomM, edgeMatM));
+    }
+    
+    // Long connections (barely visible)
+    if (edgePointsLong.length > 0) {
+        const edgeGeomL = new THREE.BufferGeometry();
+        edgeGeomL.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsLong, 3));
+        const edgeMatL = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.02 });
+        scene.add(new THREE.LineSegments(edgeGeomL, edgeMatL));
+    }
   }
 });
