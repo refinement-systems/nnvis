@@ -1,0 +1,10 @@
+[package]
+name = "nnvis-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flatbuffers = "25.1"
+
+[build-dependencies]
+# build.rs regenerates the FlatBuffers code if `flatc` is available

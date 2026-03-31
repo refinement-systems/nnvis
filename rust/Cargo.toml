@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "nnvis-core",
+    "nnvis-preprocess",
+    "nnvis-renderer",
+]
+resolver = "2"

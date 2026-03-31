@@ -1,0 +1,79 @@
+// nnvis FlatBuffers schema
+// Generated Rust code goes to: nnvis-core/src/generated/
+
+namespace nnvis;
+
+table OnnxNode {
+  id: string;
+  name: string;
+  op_type: string;
+  domain: string;
+  inputs: [string];
+  outputs: [string];
+  doc_string: string;
+  // Attributes stored as JSON string to avoid complex union types
+  attributes_json: string;
+  // metadata_props as parallel key/value vectors
+  metadata_keys: [string];
+  metadata_values: [string];
+}
+
+table TensorMeta {
+  name: string;
+  dtype: string;
+  shape: [int64];
+}
+
+table LayerDef {
+  id: string;
+  aliases: [string];
+  description: string;
+  sub_components: [string];
+}
+
+table NodeAssignment {
+  node_id: string;
+  layer_id: string;
+  scope: string;
+  matched_prefix: string;
+  matched_via: string;
+}
+
+table Edge {
+  source: string;
+  target: string;
+}
+
+table GroupNode {
+  id: string;
+  label: string;
+  description: string;
+  members: [string];
+  member_count: uint32;
+  // op_type_histogram as parallel key/count vectors
+  histogram_keys: [string];
+  histogram_counts: [uint32];
+}
+
+table ConfigSummary {
+  model_type: string;
+  architectures: [string];
+  vocab_size: uint32;
+  hidden_size: uint32;
+  num_hidden_layers: uint32;
+  num_attention_heads: uint32;
+  intermediate_size: uint32;
+  max_position_embeddings: uint32;
+}
+
+table ModelBundle {
+  config: ConfigSummary;
+  tensors: [TensorMeta];
+  graph_nodes: [OnnxNode];
+  layer_defs: [LayerDef];
+  node_assignments: [NodeAssignment];
+  group_nodes: [GroupNode];
+  group_edges: [Edge];
+}
+
+root_type ModelBundle;
