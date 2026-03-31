@@ -9,6 +9,7 @@ mod onnx_proto;
 mod onnx_parser;
 mod config_parser;
 mod layer_assignment;
+mod safetensors_parser;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -72,6 +73,15 @@ fn main() -> Result<()> {
     let assignment_result =
         layer_assignment::assign_nodes_to_layers(&onnx_bundle.graph, &layer_names);
 
+    // ── Issue #4: Parse SafeTensors metadata ──────────────────────────────
+    eprintln!("nnvis-preprocess: parsing safetensors …");
+    let safetensors = safetensors_parser::extract_safetensors_metadata(&cli.model_dir)
+        .context("safetensors parsing failed")?;
+    eprintln!(
+        "nnvis-preprocess: found {} tensors in safetensors",
+        safetensors.len()
+    );
+
     if cli.dump_json {
         let layers_json: Vec<serde_json::Value> =
             layer_names.iter().map(|l| l.to_json()).collect();
@@ -81,9 +91,28 @@ fn main() -> Result<()> {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.to_json()))
                 .collect();
+        let tensors_json: serde_json::Map<String, serde_json::Value> = safetensors
+            .iter()
+            .map(|t| {
+                let mut obj = serde_json::Map::new();
+                obj.insert("dtype".to_string(), serde_json::Value::String(t.dtype.clone()));
+                obj.insert(
+                    "shape".to_string(),
+                    serde_json::Value::Array(
+                        t.shape
+                            .iter()
+                            .map(|&s| serde_json::Value::Number(serde_json::Number::from(s)))
+                            .collect(),
+                    ),
+                );
+                (t.name.clone(), serde_json::Value::Object(obj))
+            })
+            .collect();
+
         let mut json = onnx_bundle.to_json();
         json["config"] = config.to_json();
         json["layer_names"] = serde_json::Value::Array(layers_json);
+        json["tensor_names"] = serde_json::Value::Object(tensors_json);
         json["node_assignments"] = serde_json::Value::Object(assignments_json);
         json["unmatched_nodes"] =
             serde_json::Value::Array(
@@ -101,7 +130,8 @@ fn main() -> Result<()> {
         encode_nnvis, finish_model_bundle_buffer, ConfigSummary as FbConfig,
         ConfigSummaryArgs, LayerDef as FbLayerDef, LayerDefArgs, ModelBundle,
         ModelBundleArgs, NodeAssignment as FbAssignment, NodeAssignmentArgs,
-        OnnxNode as FbOnnxNode, OnnxNodeArgs,
+        OnnxNode as FbOnnxNode, OnnxNodeArgs, TensorMeta as FbTensorMeta,
+        TensorMetaArgs,
     };
 
     let mut fbb = FlatBufferBuilder::with_capacity(1024 * 1024);
@@ -224,6 +254,24 @@ fn main() -> Result<()> {
     let assignments_vec = fbb.create_vector(&fb_assignments);
 
     // 5. Build ModelBundle
+    let fb_tensors: Vec<_> = safetensors
+        .iter()
+        .map(|t| {
+            let name_fb = fbb.create_string(&t.name);
+            let dtype_fb = fbb.create_string(&t.dtype);
+            let shape_fb = fbb.create_vector(&t.shape);
+            FbTensorMeta::create(
+                &mut fbb,
+                &TensorMetaArgs {
+                    name: Some(name_fb),
+                    dtype: Some(dtype_fb),
+                    shape: Some(shape_fb),
+                },
+            )
+        })
+        .collect();
+    let tensors_vec = fbb.create_vector(&fb_tensors);
+
     let bundle = ModelBundle::create(
         &mut fbb,
         &ModelBundleArgs {
@@ -231,6 +279,7 @@ fn main() -> Result<()> {
             graph_nodes: Some(nodes_vec),
             layer_defs: Some(layers_vec),
             node_assignments: Some(assignments_vec),
+            tensors: Some(tensors_vec),
             ..Default::default()
         },
     );

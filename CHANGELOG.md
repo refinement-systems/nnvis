@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Parse SafeTensors header and extract tensor metadata (#4)
 - Assign ONNX nodes to conceptual layers via scope and heuristic matching (#6)
 - Read config.json and generate conceptual layer definitions (#5)
 - Parse ONNX protobuf and extract graph topology (#3)
