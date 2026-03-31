@@ -1,9 +1,13 @@
 // nnvis-preprocess — native CLI that reads model files and writes .nnvis
 //
-// This is a skeleton.  Full extraction logic will be implemented in
-// issues #3 (ONNX parsing), #4 (SafeTensors), #5 (config.json), #6 (layer
-// assignment), and #7 (grouped graph).
+// Issue #3: ONNX protobuf parsing is implemented here.
+// Remaining work: #4 (SafeTensors), #5 (config.json),
+//                 #6 (layer assignment), #7 (grouped graph).
 
+mod onnx_proto;
+mod onnx_parser;
+
+use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -19,9 +23,13 @@ struct Cli {
     /// Defaults to <model_dir>/model.nnvis.
     #[arg(short, long)]
     output: Option<PathBuf>,
+
+    /// Dump the parsed ONNX graph as JSON to stdout (for debugging).
+    #[arg(long)]
+    dump_json: bool,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let output = cli
@@ -30,22 +38,69 @@ fn main() {
 
     eprintln!("nnvis-preprocess: model_dir = {}", cli.model_dir.display());
     eprintln!("nnvis-preprocess: output    = {}", output.display());
-    eprintln!("nnvis-preprocess: extraction logic not yet implemented (see issues #3–#7)");
 
-    // Placeholder: write an empty (but valid header) .nnvis file so the
-    // scaffold can be tested end-to-end.
+    // ── Issue #3: Parse the ONNX graph ──────────────────────────────────────
+    eprintln!("nnvis-preprocess: parsing ONNX graph …");
+    let onnx_bundle = onnx_parser::extract_onnx_graph(&cli.model_dir)
+        .context("ONNX parsing failed")?;
+
+    eprintln!(
+        "nnvis-preprocess: found {} nodes, {} initializers, {} value_info entries",
+        onnx_bundle.graph.len(),
+        onnx_bundle.initializers.len(),
+        onnx_bundle.value_info.len(),
+    );
+
+    if cli.dump_json {
+        let json = onnx_bundle.to_json();
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
+
+    // ── Write placeholder .nnvis (full FlatBuffer encoding in issues #6/#7) ─
     use flatbuffers::FlatBufferBuilder;
-    use nnvis_core::{encode_nnvis, finish_model_bundle_buffer, ModelBundle, ModelBundleArgs};
+    use nnvis_core::{encode_nnvis, finish_model_bundle_buffer, ModelBundle, ModelBundleArgs,
+                     OnnxNode as FbOnnxNode, OnnxNodeArgs};
 
-    let mut fbb = FlatBufferBuilder::with_capacity(64);
-    let bundle = ModelBundle::create(&mut fbb, &ModelBundleArgs::default());
+    let mut fbb = FlatBufferBuilder::with_capacity(64 * 1024);
+
+    // Encode the parsed graph nodes into FlatBuffers.
+    let fb_nodes: Vec<_> = onnx_bundle.graph.iter().map(|n| {
+        let id    = fbb.create_string(&n.id);
+        let op    = fbb.create_string(&n.op_type);
+        let name  = fbb.create_string(&n.name);
+        let attrs = fbb.create_string(&serde_json::to_string(&n.attributes).unwrap_or_default());
+        let inputs_fb: Vec<_>  = n.inputs.iter().map(|s| fbb.create_string(s)).collect();
+        let outputs_fb: Vec<_> = n.outputs.iter().map(|s| fbb.create_string(s)).collect();
+        let inp_vec = fbb.create_vector(&inputs_fb);
+        let out_vec = fbb.create_vector(&outputs_fb);
+        FbOnnxNode::create(&mut fbb, &OnnxNodeArgs {
+            id: Some(id),
+            op_type: Some(op),
+            name: Some(name),
+            attributes_json: Some(attrs),
+            inputs: Some(inp_vec),
+            outputs: Some(out_vec),
+            ..Default::default()
+        })
+    }).collect();
+
+    let nodes_vec = fbb.create_vector(&fb_nodes);
+
+    let bundle = ModelBundle::create(&mut fbb, &ModelBundleArgs {
+        graph_nodes: Some(nodes_vec),
+        ..Default::default()
+    });
     finish_model_bundle_buffer(&mut fbb, bundle);
     let payload = encode_nnvis(fbb.finished_data());
 
-    std::fs::write(&output, &payload).expect("failed to write output file");
+    std::fs::write(&output, &payload).context("failed to write output file")?;
     eprintln!(
-        "nnvis-preprocess: wrote {} bytes to {}",
+        "nnvis-preprocess: wrote {} bytes to {} ({} nodes encoded)",
         payload.len(),
-        output.display()
+        output.display(),
+        onnx_bundle.graph.len(),
     );
+
+    Ok(())
 }

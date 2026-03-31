@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Parse ONNX protobuf and extract graph topology (#3)
 - Scaffold Cargo workspace with nnvis-core, nnvis-preprocess, and nnvis-renderer crates (#2)
 
 ### Fixed
