@@ -1,11 +1,12 @@
 // nnvis-preprocess — native CLI that reads model files and writes .nnvis
 //
-// Issue #3: ONNX protobuf parsing is implemented here.
-// Remaining work: #4 (SafeTensors), #5 (config.json),
-//                 #6 (layer assignment), #7 (grouped graph).
+// Issue #3: ONNX protobuf parsing      — done
+// Issue #5: config.json + layer names  — done
+// Remaining work: #4 (SafeTensors), #6 (layer assignment), #7 (grouped graph).
 
 mod onnx_proto;
 mod onnx_parser;
+mod config_parser;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -39,6 +40,19 @@ fn main() -> Result<()> {
     eprintln!("nnvis-preprocess: model_dir = {}", cli.model_dir.display());
     eprintln!("nnvis-preprocess: output    = {}", output.display());
 
+    // ── Issue #5: Parse config.json and generate layer definitions ────────────
+    eprintln!("nnvis-preprocess: parsing config.json …");
+    let config = config_parser::extract_config_summary(&cli.model_dir)
+        .context("config.json parsing failed")?;
+    let layer_names = config_parser::generate_layer_names(&config);
+
+    eprintln!(
+        "nnvis-preprocess: model_type = {:?}, num_hidden_layers = {:?}, layers = {}",
+        config.model_type,
+        config.num_hidden_layers,
+        layer_names.len(),
+    );
+
     // ── Issue #3: Parse the ONNX graph ──────────────────────────────────────
     eprintln!("nnvis-preprocess: parsing ONNX graph …");
     let onnx_bundle = onnx_parser::extract_onnx_graph(&cli.model_dir)
@@ -52,7 +66,11 @@ fn main() -> Result<()> {
     );
 
     if cli.dump_json {
-        let json = onnx_bundle.to_json();
+        let layers_json: Vec<serde_json::Value> =
+            layer_names.iter().map(|l| l.to_json()).collect();
+        let mut json = onnx_bundle.to_json();
+        json["config"] = config.to_json();
+        json["layer_names"] = serde_json::Value::Array(layers_json);
         println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
