@@ -2,11 +2,13 @@
 //
 // Issue #3: ONNX protobuf parsing      — done
 // Issue #5: config.json + layer names  — done
-// Remaining work: #4 (SafeTensors), #6 (layer assignment), #7 (grouped graph).
+// Issue #6: node-to-layer assignment   — done
+// Remaining work: #4 (SafeTensors), #7 (grouped graph).
 
 mod onnx_proto;
 mod onnx_parser;
 mod config_parser;
+mod layer_assignment;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -65,59 +67,183 @@ fn main() -> Result<()> {
         onnx_bundle.value_info.len(),
     );
 
+    // ── Issue #6: Assign nodes to layers ───────────────────────────────────
+    eprintln!("nnvis-preprocess: assigning nodes to layers …");
+    let assignment_result =
+        layer_assignment::assign_nodes_to_layers(&onnx_bundle.graph, &layer_names);
+
     if cli.dump_json {
         let layers_json: Vec<serde_json::Value> =
             layer_names.iter().map(|l| l.to_json()).collect();
+        let assignments_json: serde_json::Map<String, serde_json::Value> =
+            assignment_result
+                .assignments
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_json()))
+                .collect();
         let mut json = onnx_bundle.to_json();
         json["config"] = config.to_json();
         json["layer_names"] = serde_json::Value::Array(layers_json);
+        json["node_assignments"] = serde_json::Value::Object(assignments_json);
+        json["unmatched_nodes"] =
+            serde_json::Value::Array(
+                assignment_result.unmatched_nodes.into_iter()
+                    .map(serde_json::Value::String)
+                    .collect()
+            );
         println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
 
-    // ── Write placeholder .nnvis (full FlatBuffer encoding in issues #6/#7) ─
+    // ── Write .nnvis FlatBuffer ─────────────────────────────────────────────
     use flatbuffers::FlatBufferBuilder;
-    use nnvis_core::{encode_nnvis, finish_model_bundle_buffer, ModelBundle, ModelBundleArgs,
-                     OnnxNode as FbOnnxNode, OnnxNodeArgs};
+    use nnvis_core::{
+        encode_nnvis, finish_model_bundle_buffer, ConfigSummary as FbConfig,
+        ConfigSummaryArgs, LayerDef as FbLayerDef, LayerDefArgs, ModelBundle,
+        ModelBundleArgs, NodeAssignment as FbAssignment, NodeAssignmentArgs,
+        OnnxNode as FbOnnxNode, OnnxNodeArgs,
+    };
 
-    let mut fbb = FlatBufferBuilder::with_capacity(64 * 1024);
+    let mut fbb = FlatBufferBuilder::with_capacity(1024 * 1024);
 
-    // Encode the parsed graph nodes into FlatBuffers.
-    let fb_nodes: Vec<_> = onnx_bundle.graph.iter().map(|n| {
-        let id    = fbb.create_string(&n.id);
-        let op    = fbb.create_string(&n.op_type);
-        let name  = fbb.create_string(&n.name);
-        let attrs = fbb.create_string(&serde_json::to_string(&n.attributes).unwrap_or_default());
-        let inputs_fb: Vec<_>  = n.inputs.iter().map(|s| fbb.create_string(s)).collect();
-        let outputs_fb: Vec<_> = n.outputs.iter().map(|s| fbb.create_string(s)).collect();
-        let inp_vec = fbb.create_vector(&inputs_fb);
-        let out_vec = fbb.create_vector(&outputs_fb);
-        FbOnnxNode::create(&mut fbb, &OnnxNodeArgs {
-            id: Some(id),
-            op_type: Some(op),
-            name: Some(name),
-            attributes_json: Some(attrs),
-            inputs: Some(inp_vec),
-            outputs: Some(out_vec),
-            ..Default::default()
+    // 1. Encode ConfigSummary
+    let cf_model_type = fbb.create_string(&config.model_type);
+    let cf_archs_fb: Vec<_> = config
+        .architectures
+        .iter()
+        .map(|s| fbb.create_string(s))
+        .collect();
+    let cf_archs_vec = fbb.create_vector(&cf_archs_fb);
+    let fb_config = FbConfig::create(
+        &mut fbb,
+        &ConfigSummaryArgs {
+            model_type: Some(cf_model_type),
+            architectures: Some(cf_archs_vec),
+            vocab_size: config.vocab_size.unwrap_or(0),
+            hidden_size: config.hidden_size.unwrap_or(0),
+            num_hidden_layers: config.num_hidden_layers.unwrap_or(0),
+            num_attention_heads: config.num_attention_heads.unwrap_or(0),
+            intermediate_size: config.intermediate_size.unwrap_or(0),
+            max_position_embeddings: config.max_position_embeddings.unwrap_or(0),
+        },
+    );
+
+    // 2. Encode LayerDefs
+    let fb_layers: Vec<_> = layer_names
+        .iter()
+        .map(|l| {
+            let id = fbb.create_string(&l.id);
+            let desc = fbb.create_string(&l.description);
+            let aliases_fb: Vec<_> = l.aliases.iter().map(|s| fbb.create_string(s)).collect();
+            let sub_fb: Vec<_> = l.sub_components.iter().map(|s| fbb.create_string(s)).collect();
+            let aliases_vec = fbb.create_vector(&aliases_fb);
+            let sub_vec = fbb.create_vector(&sub_fb);
+            FbLayerDef::create(
+                &mut fbb,
+                &LayerDefArgs {
+                    id: Some(id),
+                    description: Some(desc),
+                    aliases: Some(aliases_vec),
+                    sub_components: Some(sub_vec),
+                },
+            )
         })
-    }).collect();
+        .collect();
+    let layers_vec = fbb.create_vector(&fb_layers);
 
+    // 3. Encode OnnxNodes
+    let fb_nodes: Vec<_> = onnx_bundle
+        .graph
+        .iter()
+        .map(|n| {
+            let id = fbb.create_string(&n.id);
+            let op = fbb.create_string(&n.op_type);
+            let name = fbb.create_string(&n.name);
+            let domain = fbb.create_string(&n.domain);
+            let attrs = fbb.create_string(&serde_json::to_string(&n.attributes).unwrap_or_default());
+            let doc = fbb.create_string(&n.doc_string);
+
+            let inputs_fb: Vec<_> = n.inputs.iter().map(|s| fbb.create_string(s)).collect();
+            let outputs_fb: Vec<_> = n.outputs.iter().map(|s| fbb.create_string(s)).collect();
+            let inp_vec = fbb.create_vector(&inputs_fb);
+            let out_vec = fbb.create_vector(&outputs_fb);
+
+            // Metadata props
+            let mut keys: Vec<_> = n.metadata_props.keys().collect();
+            keys.sort(); // Deterministic order
+            let k_fb: Vec<_> = keys.iter().map(|k| fbb.create_string(k)).collect();
+            let v_fb: Vec<_> = keys
+                .iter()
+                .map(|k| fbb.create_string(n.metadata_props.get(*k).unwrap()))
+                .collect();
+            let k_vec = fbb.create_vector(&k_fb);
+            let v_vec = fbb.create_vector(&v_fb);
+
+            FbOnnxNode::create(
+                &mut fbb,
+                &OnnxNodeArgs {
+                    id: Some(id),
+                    op_type: Some(op),
+                    name: Some(name),
+                    domain: Some(domain),
+                    attributes_json: Some(attrs),
+                    inputs: Some(inp_vec),
+                    outputs: Some(out_vec),
+                    doc_string: Some(doc),
+                    metadata_keys: Some(k_vec),
+                    metadata_values: Some(v_vec),
+                },
+            )
+        })
+        .collect();
     let nodes_vec = fbb.create_vector(&fb_nodes);
 
-    let bundle = ModelBundle::create(&mut fbb, &ModelBundleArgs {
-        graph_nodes: Some(nodes_vec),
-        ..Default::default()
-    });
+    // 4. Encode NodeAssignments
+    let fb_assignments: Vec<_> = assignment_result
+        .assignments
+        .iter()
+        .map(|(node_id, a)| {
+            let n_id = fbb.create_string(node_id);
+            let l_id = fbb.create_string(&a.layer_id);
+            let scope = fbb.create_string(a.scope.as_deref().unwrap_or(""));
+            let prefix = fbb.create_string(a.matched_prefix.as_deref().unwrap_or(""));
+            let via = fbb.create_string(&a.matched_via);
+
+            FbAssignment::create(
+                &mut fbb,
+                &NodeAssignmentArgs {
+                    node_id: Some(n_id),
+                    layer_id: Some(l_id),
+                    scope: Some(scope),
+                    matched_prefix: Some(prefix),
+                    matched_via: Some(via),
+                },
+            )
+        })
+        .collect();
+    let assignments_vec = fbb.create_vector(&fb_assignments);
+
+    // 5. Build ModelBundle
+    let bundle = ModelBundle::create(
+        &mut fbb,
+        &ModelBundleArgs {
+            config: Some(fb_config),
+            graph_nodes: Some(nodes_vec),
+            layer_defs: Some(layers_vec),
+            node_assignments: Some(assignments_vec),
+            ..Default::default()
+        },
+    );
     finish_model_bundle_buffer(&mut fbb, bundle);
     let payload = encode_nnvis(fbb.finished_data());
 
     std::fs::write(&output, &payload).context("failed to write output file")?;
     eprintln!(
-        "nnvis-preprocess: wrote {} bytes to {} ({} nodes encoded)",
+        "nnvis-preprocess: wrote {} bytes to {} ({} nodes, {} assignments encoded)",
         payload.len(),
         output.display(),
         onnx_bundle.graph.len(),
+        assignment_result.assignments.len(),
     );
 
     Ok(())
