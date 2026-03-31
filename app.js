@@ -121,7 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (data.executable_graph_3d) {
       viewGraphBtn.style.display = 'block';
-      init3DGraph(data.executable_graph_3d);
+      init3DGraph(data);
     } else {
       viewGraphBtn.style.display = 'none';
       graphContainer.innerHTML = '';
@@ -219,8 +219,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3D Rendering Logic
   let renderer, scene, camera, controls;
+  let layerSprites = [];
+  let layerBoxes = [];
+  let animationTime = 0;
 
-  function init3DGraph(graphData) {
+  function init3DGraph(data) {
+    const graphData = data.executable_graph_3d;
     if (!renderer) {
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x1a1c23); // Match existing styling lightly
@@ -247,6 +251,20 @@ document.addEventListener('DOMContentLoaded', () => {
       renderer.setAnimationLoop(() => {
         if (graphModal.classList.contains('active')) {
           controls.update();
+
+          // Apply animations
+          animationTime += 0.016;
+          layerSprites.forEach(sprite => {
+            if (sprite.userData && sprite.userData.baseY !== undefined) {
+              sprite.position.y = sprite.userData.baseY + Math.sin(animationTime * 2 + sprite.userData.offset) * 1.5;
+            }
+          });
+          layerBoxes.forEach(box => {
+            if (box.material && box.userData && box.userData.baseOpacity !== undefined) {
+              box.material.opacity = box.userData.baseOpacity + Math.sin(animationTime + box.userData.offset) * 0.03;
+            }
+          });
+
           renderer.render(scene, camera);
         }
       });
@@ -342,6 +360,112 @@ document.addEventListener('DOMContentLoaded', () => {
       edgeGeomL.setAttribute('position', new THREE.Float32BufferAttribute(edgePointsLong, 3));
       const edgeMatL = new THREE.LineBasicMaterial({ color: 0x4f5b66, transparent: true, opacity: 0.02 });
       scene.add(new THREE.LineSegments(edgeGeomL, edgeMatL));
+    }
+
+    // 3. Render Conceptual Layer Bounding Boxes and Labels
+    layerSprites.forEach(s => scene.remove(s));
+    layerBoxes.forEach(b => scene.remove(b));
+    layerSprites = [];
+    layerBoxes = [];
+    
+    if (data.node_assignments && data.layer_names) {
+      const layerBounds = {};
+      const padding = 2.0;
+
+      for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
+        const assignment = data.node_assignments[n.id];
+        if (assignment && assignment.layer_id !== "unassigned") {
+          const layerId = assignment.layer_id;
+          if (!layerBounds[layerId]) {
+            layerBounds[layerId] = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+          }
+          for (let j = 0; j < 3; j++) {
+            if (n.pos[j] < layerBounds[layerId].min[j]) layerBounds[layerId].min[j] = n.pos[j];
+            if (n.pos[j] > layerBounds[layerId].max[j]) layerBounds[layerId].max[j] = n.pos[j];
+          }
+        }
+      }
+
+      data.layer_names.forEach((layer, idx) => {
+        const bounds = layerBounds[layer.id];
+        if (!bounds) return;
+
+        for (let j = 0; j < 3; j++) {
+          if (bounds.max[j] - bounds.min[j] < 0.1) {
+            bounds.max[j] += 1;
+            bounds.min[j] -= 1;
+          }
+        }
+
+        const width = bounds.max[0] - bounds.min[0] + padding * 2;
+        const height = bounds.max[1] - bounds.min[1] + padding * 2;
+        const depth = bounds.max[2] - bounds.min[2] + padding * 2;
+
+        const centerX = (bounds.min[0] + bounds.max[0]) / 2;
+        const centerY = (bounds.min[1] + bounds.max[1]) / 2;
+        const centerZ = (bounds.min[2] + bounds.max[2]) / 2;
+
+        const boxGeom = new THREE.BoxGeometry(width, height, depth);
+        const color = new THREE.Color().setHSL((idx * 0.6180339887) % 1, 0.6, 0.4); // Golden ratio for distributed coloring
+        
+        const boxMat = new THREE.MeshBasicMaterial({
+          color: color,
+          transparent: true,
+          opacity: 0.08,
+          depthWrite: false,
+          side: THREE.BackSide
+        });
+        const boxMesh = new THREE.Mesh(boxGeom, boxMat);
+        boxMesh.position.set(centerX, centerY, centerZ);
+        boxMesh.userData = { offset: idx, baseOpacity: 0.08 };
+        scene.add(boxMesh);
+        layerBoxes.push(boxMesh);
+
+        const edgesGeom = new THREE.EdgesGeometry(boxGeom);
+        const edgesMat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.3 });
+        const lineMesh = new THREE.LineSegments(edgesGeom, edgesMat);
+        lineMesh.position.set(centerX, centerY, centerZ);
+        scene.add(lineMesh);
+        layerBoxes.push(lineMesh);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = '#' + color.getHexString();
+        ctx.beginPath();
+        ctx.roundRect(0, canvas.height/2 - 30, canvas.width, 60, 15);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 36px "Outfit", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(layer.description || layer.id, canvas.width / 2, canvas.height / 2);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.minFilter = THREE.LinearFilter;
+        
+        const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+        const sprite = new THREE.Sprite(spriteMat);
+        sprite.renderOrder = 999;
+        
+        // Dynamic sprite sizing based on actual bounds width
+        let spriteScaleX = width > 15 ? width : 15;
+        let spriteScaleY = spriteScaleX * (canvas.height/canvas.width);
+        
+        sprite.scale.set(spriteScaleX, spriteScaleY, 1);
+        sprite.position.set(centerX, bounds.max[1] + (height * 0.1) + padding + 1.5, bounds.max[2] + padding);
+        sprite.userData = { baseY: sprite.position.y, offset: idx };
+
+        scene.add(sprite);
+        layerSprites.push(sprite);
+      });
     }
   }
 });
