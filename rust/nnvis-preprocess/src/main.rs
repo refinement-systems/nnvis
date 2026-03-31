@@ -10,6 +10,7 @@ mod onnx_parser;
 mod config_parser;
 mod layer_assignment;
 mod safetensors_parser;
+mod grouped_graph;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -82,6 +83,19 @@ fn main() -> Result<()> {
         safetensors.len()
     );
 
+    // ── Issue #7: Build grouped graph ──────────────────────────────────────
+    eprintln!("nnvis-preprocess: building grouped graph …");
+    let grouped_graph = grouped_graph::build_grouped_graph(
+        &onnx_bundle.graph,
+        &assignment_result.assignments,
+        &layer_names,
+    );
+    eprintln!(
+        "nnvis-preprocess: built grouped graph with {} nodes and {} edges",
+        grouped_graph.group_nodes.len(),
+        grouped_graph.group_edges.len()
+    );
+
     if cli.dump_json {
         let layers_json: Vec<serde_json::Value> =
             layer_names.iter().map(|l| l.to_json()).collect();
@@ -131,7 +145,8 @@ fn main() -> Result<()> {
         ConfigSummaryArgs, LayerDef as FbLayerDef, LayerDefArgs, ModelBundle,
         ModelBundleArgs, NodeAssignment as FbAssignment, NodeAssignmentArgs,
         OnnxNode as FbOnnxNode, OnnxNodeArgs, TensorMeta as FbTensorMeta,
-        TensorMetaArgs,
+        TensorMetaArgs, Edge as FbEdge, EdgeArgs as FbEdgeArgs,
+        GroupNode as FbGroupNode, GroupNodeArgs as FbGroupNodeArgs,
     };
 
     let mut fbb = FlatBufferBuilder::with_capacity(1024 * 1024);
@@ -272,6 +287,61 @@ fn main() -> Result<()> {
         .collect();
     let tensors_vec = fbb.create_vector(&fb_tensors);
 
+    // 6. Encode GroupNodes
+    let fb_group_nodes: Vec<_> = grouped_graph
+        .group_nodes
+        .iter()
+        .map(|g| {
+            let id = fbb.create_string(&g.id);
+            let label = fbb.create_string(&g.label);
+            let desc = fbb.create_string(&g.description);
+            let members_fb: Vec<_> = g.members.iter().map(|s| fbb.create_string(s)).collect();
+            let members_vec = fbb.create_vector(&members_fb);
+
+            let mut hist_keys: Vec<_> = g.op_type_histogram.keys().collect();
+            hist_keys.sort();
+            let keys_fb: Vec<_> = hist_keys.iter().map(|k| fbb.create_string(k)).collect();
+            let counts: Vec<_> = hist_keys
+                .iter()
+                .map(|k| *g.op_type_histogram.get(*k).unwrap())
+                .collect();
+            let keys_vec = fbb.create_vector(&keys_fb);
+            let counts_vec = fbb.create_vector(&counts);
+
+            FbGroupNode::create(
+                &mut fbb,
+                &FbGroupNodeArgs {
+                    id: Some(id),
+                    label: Some(label),
+                    description: Some(desc),
+                    members: Some(members_vec),
+                    member_count: g.member_count,
+                    histogram_keys: Some(keys_vec),
+                    histogram_counts: Some(counts_vec),
+                },
+            )
+        })
+        .collect();
+    let group_nodes_vec = fbb.create_vector(&fb_group_nodes);
+
+    // 7. Encode GroupEdges
+    let fb_group_edges: Vec<_> = grouped_graph
+        .group_edges
+        .iter()
+        .map(|e| {
+            let src = fbb.create_string(&e.source);
+            let tgt = fbb.create_string(&e.target);
+            FbEdge::create(
+                &mut fbb,
+                &FbEdgeArgs {
+                    source: Some(src),
+                    target: Some(tgt),
+                },
+            )
+        })
+        .collect();
+    let group_edges_vec = fbb.create_vector(&fb_group_edges);
+
     let bundle = ModelBundle::create(
         &mut fbb,
         &ModelBundleArgs {
@@ -280,6 +350,8 @@ fn main() -> Result<()> {
             layer_defs: Some(layers_vec),
             node_assignments: Some(assignments_vec),
             tensors: Some(tensors_vec),
+            group_nodes: Some(group_nodes_vec),
+            group_edges: Some(group_edges_vec),
             ..Default::default()
         },
     );
