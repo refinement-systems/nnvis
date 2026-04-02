@@ -83,10 +83,28 @@ document.addEventListener('DOMContentLoaded', () => {
   // URL param to auto-load for testing (requires local server)
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.has('test')) {
-    fetch('models/MoritzLaurer_mDeBERTa-v3-base-mnli-xnli/model_summary.json')
-      .then(res => res.json())
-      .then(data => renderDashboard(data))
-      .catch(err => console.log("Auto-load requires local HTTP server: " + err.message));
+    const testCandidates = [
+      'models/MoritzLaurer_mDeBERTa-v3-base-mnli-xnli/model_summary.json',
+      'mock/model_summary.json'
+    ];
+
+    const tryFetchTestData = async () => {
+      for (const path of testCandidates) {
+        try {
+          const res = await fetch(path);
+          if (!res.ok) continue;
+          const data = await res.json();
+          renderDashboard(data);
+          console.log(`Auto-loaded test data from ${path}`);
+          return;
+        } catch (_) {
+          // Try the next candidate.
+        }
+      }
+      console.log("Auto-load requires local HTTP server and test JSON at models/... or mock/model_summary.json");
+    };
+
+    tryFetchTestData();
   }
 
   // Render Logic
